@@ -23,7 +23,7 @@ if not TOKEN:
     logger.error("BOT_TOKEN नहीं मिला! Railway Variables में डालो।")
     raise ValueError("BOT_TOKEN required")
 
-# RSS फीड्स (सरकारी जॉब्स + स्कीम्स)
+# RSS फीड्स — सरकारी जॉब्स और स्कीम्स के लिए
 RSS_FEEDS = [
     "https://www.sarkariresult.com/rssfeed.xml",
     "https://www.freejobalert.com/latest-jobs-rss-feed/",
@@ -41,15 +41,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• Bihar sarkari naukri\n"
         "• PM Kisan scheme details\n"
         "• Latest RBI assistant apply kaise kare\n"
-        "• Government jobs list\n\n"
+        "• Government jobs list\n"
+        "• Bihar teacher bharti\n\n"
         "कमांड्स:\n"
-        "/jobs → सभी लेटेस्ट जॉब्स/स्कीम्स की लिस्ट\n"
+        "/jobs → लेटेस्ट जॉब्स/स्कीम्स लिस्ट\n"
         "/subscribe → रोज सुबह अपडेट्स\n"
         "/help → मदद"
     )
 
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("लोड हो रहा है... सरकारी जॉब्स और स्कीम्स की लेटेस्ट लिस्ट तैयार हो रही है ⏳")
+    await update.message.reply_text("लोड हो रहा है... सभी सरकारी जॉब्स और स्कीम्स की लेटेस्ट लिस्ट तैयार हो रही है ⏳")
 
     message = "📰 **सरकारी जॉब्स और स्कीम्स की लेटेस्ट लिस्ट**\n(RSS अपडेट्स से)\n\n"
 
@@ -68,7 +69,7 @@ async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             message += "────────────────────\n\n"
 
     if not found:
-        message += "अभी कोई नई अपडेट नहीं। थोड़ी देर बाद ट्राई करें!"
+        message += "अभी कोई नई अपडेट नहीं। थोड़ी देर बाद /jobs ट्राई करें!"
 
     await update.message.reply_text(message)
 
@@ -110,28 +111,39 @@ async def daily_update(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.error(f"{chat_id} को मैसेज नहीं भेजा: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Agentic AI: हर मैसेज को समझकर जवाब देगा"""
-    text = update.message.text.lower()
+    """Agentic AI: हर मैसेज को समझकर जवाब देगा (ChatGPT जैसा)"""
+    text = update.message.text.lower().strip()
     user_id = update.effective_user.id
     logger.info(f"User {user_id} ने पूछा: {text}")
 
-    # अगर जॉब या स्कीम से संबंधित है तो jobs दिखाओ
-    if any(kw in text for kw in ["job", "naukri", "bharti", "vacancy", "scheme", "yojana", "स्कीम", "योजना", "list", "लिस्ट"]):
+    # अगर जॉब/स्कीम/लिस्ट से संबंधित है तो jobs दिखाओ
+    if any(kw in text for kw in ["job", "naukri", "bharti", "vacancy", "scheme", "yojana", "स्कीम", "योजना", "list", "लिस्ट", "government", "sarkari", "bihar", "pm kisan", "rbi", "apply"]):
         await jobs(update, context)
         return
 
     # अगर सब्सक्राइब से संबंधित
-    if any(kw in text for kw in ["subscribe", "सब्सक्राइब", "रोज अपडेट", "daily update"]):
+    if any(kw in text for kw in ["subscribe", "सब्सक्राइब", "रोज अपडेट", "daily update", "update bhejo"]):
         await subscribe(update, context)
+        return
+
+    # अगर हेल्प मांग रहा है
+    if "help" in text or "मदद" in text:
+        await update.message.reply_text(
+            "मदद चाहिए? ये कर सकते हो:\n\n"
+            "/jobs → लेटेस्ट जॉब्स और स्कीम्स\n"
+            "/subscribe → रोज अपडेट्स\n"
+            "या बस पूछो: 'Bihar police bharti', 'PM Kisan kya hai', 'RBI assistant apply process'"
+        )
         return
 
     # डिफॉल्ट स्मार्ट जवाब (ChatGPT जैसा फील)
     reply = (
-        "समझ गया! सरकारी जॉब्स, स्कीम्स या अप्लाई प्रोसेस के बारे में पूछो।\n\n"
+        "समझ गया! सरकारी जॉब्स, स्कीम्स, अप्लाई प्रोसेस या कोई डिटेल्स चाहिए? बताओ।\n\n"
         "उदाहरण:\n"
-        "• Bihar police bharti 2026\n"
-        "• PM Kisan yojana kya hai\n"
-        "• Latest government jobs list\n\n"
+        "• Bihar sarkari naukri latest\n"
+        "• PM Kisan yojana eligibility\n"
+        "• RBI assistant 2026 apply kaise kare\n"
+        "• Government jobs list Bihar\n\n"
         "या सीधे /jobs भेजो!"
     )
 
@@ -154,12 +166,7 @@ def main() -> None:
         job_queue.run_daily(daily_update, time=time(8, 0, 0))
 
     # हर नॉन-कमांड मैसेज पर Agentic रिस्पॉन्स
-    application.add_handler(
-    MessageHandler(
-        filters.TEXT & \~filters.COMMAND,
-        handle_message
-    )
-    )
+    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
 
     logger.info("Polling शुरू... Telegram से बातचीत का इंतजार")
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
