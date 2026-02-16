@@ -166,7 +166,7 @@ def main() -> None:
         job_queue.run_daily(daily_update, time=time(8, 0, 0))
 
     # हर नॉन-कमांड मैसेज पर Agentic रिस्पॉन्स
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Polling शुरू... Telegram से बातचीत का इंतजार")
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
