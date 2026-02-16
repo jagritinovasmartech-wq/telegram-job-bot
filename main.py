@@ -1,32 +1,51 @@
 import os
 import logging
 import feedparser
+from google import genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
-from google import genai
 
-# ── CONFIG ──────────────────────────────────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")
+# ================== ENV CHECK ==================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ TELEGRAM_TOKEN missing in environment variables")
+
+if not GEMINI_API_KEY:
+    raise ValueError("❌ GEMINI_API_KEY missing in environment variables")
+
+# ================== LOGGING ==================
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
-user_chats: dict = {}
+# ================== GEMINI CLIENT ==================
+client = genai.Client(api_key=GEMINI_API_KEY)
 
+# ================== MEMORY CONTROL ==================
+user_chats = {}
+MAX_HISTORY = 6
+
+# ================== AI SYSTEM PROMPT ==================
 JARVIS_PROMPT = """Tu JARVIS hai — India ka #1 Sarkari Job AI Expert.
-1. Hindi aur English dono mein baat kar (user jis language mein pooche)
-2. Sarkari naukri, SSC, UPSC, Railway, Banking, Police, Teaching, Defence jobs expert hai
-3. Government schemes (PM schemes, state schemes) bhi batata hai
-4. Har jawab mein emojis use kar
-5. Job sawaalon mein: naam, eligibility, official website link do
-6. Short, crisp aur helpful answers do
-Tu India ka best job finder AI hai!"""
+Rules:
+1. Hindi + English mix me reply kar
+2. Har jawab me emojis use kar
+3. SSC, UPSC, Railway, Banking, Police, Defence expert hai
+4. Government schemes bhi explain karta hai
+5. Job answer me: Name, Eligibility, Official Website zaroor de
+6. Short aur practical answer de
+"""
+
+# ================== JOB FEEDS ==================
+MAIN_FEED = "https://www.freejobalert.com/feed/"
 
 CATEGORY_FEEDS = {
     "banking":  "https://www.freejobalert.com/bank-jobs/feed/",
@@ -40,216 +59,160 @@ CATEGORY_FEEDS = {
 }
 
 CAT_NAMES = {
-    "banking": "🏦 Banking Jobs", "railway": "🚂 Railway Jobs",
-    "ssc": "📚 SSC Jobs",         "upsc": "🎖️ UPSC Jobs",
-    "teaching": "🏫 Teaching Jobs","defence": "🛡️ Defence Jobs",
-    "state": "🏛️ State Govt Jobs","police": "👮 Police Jobs"
+    "banking": "🏦 Banking Jobs",
+    "railway": "🚂 Railway Jobs",
+    "ssc": "📚 SSC Jobs",
+    "upsc": "🎖️ UPSC Jobs",
+    "teaching": "🏫 Teaching Jobs",
+    "defence": "🛡️ Defence Jobs",
+    "state": "🏛️ State Govt Jobs",
+    "police": "👮 Police Jobs"
 }
 
-# ── RSS FETCH ────────────────────────────────────────────────────────
-def fetch_jobs(feed_url: str, max_items: int = 8) -> list:
+# ================== JOB FETCH ==================
+def fetch_jobs(feed_url: str, limit: int = 6):
     try:
         feed = feedparser.parse(feed_url)
         jobs = []
-        for entry in feed.entries[:max_items]:
+        for entry in feed.entries[:limit]:
             jobs.append({
                 "title": entry.get("title", "No Title"),
                 "link": entry.get("link", "#"),
-                "published": entry.get("published", "")[:16] if entry.get("published") else "",
+                "date": entry.get("published", "")[:16]
             })
         return jobs
     except Exception as e:
-        logger.error(f"RSS error: {e}")
+        logger.error(f"RSS Error: {e}")
         return []
 
-def format_jobs(jobs: list, title: str = "🏛️ Latest Govt Jobs"):
+def format_jobs(jobs, title="🏛️ Latest Jobs"):
     if not jobs:
-        return "❌ Koi job nahi mili. Thodi der baad try karein.", InlineKeyboardMarkup([])
+        return "❌ Abhi koi job nahi mili. Thodi der baad try karo.", None
+
     text = f"*{title}*\n\n"
     buttons = []
-    for i, job in enumerate(jobs[:8], 1):
-        t = job['title'][:55] + "..." if len(job['title']) > 55 else job['title']
-        text += f"*{i}.* {t}\n"
-        if job.get('published'):
-            text += f"   📅 {job['published']}\n"
-        text += "\n"
-        buttons.append([InlineKeyboardButton(f"🔗 {i}. Apply/Details", url=job['link'])])
+
+    for i, job in enumerate(jobs, 1):
+        text += f"{i}. {job['title']}\n📅 {job['date']}\n\n"
+        buttons.append([InlineKeyboardButton(f"🔗 Apply {i}", url=job["link"])])
+
     buttons.append([
-        InlineKeyboardButton("🔄 Refresh", callback_data="all_jobs"),
-        InlineKeyboardButton("📂 Categories", callback_data="show_categories")
+        InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
+        InlineKeyboardButton("📂 Categories", callback_data="categories")
     ])
+
     return text, InlineKeyboardMarkup(buttons)
 
-# ── GEMINI AI CHAT ───────────────────────────────────────────────────
-async def get_ai_response(user_id: int, message: str) -> str:
-    try:
-        if user_id not in user_chats:
-            user_chats[user_id] = model.start_chat(history=[])
-        chat = user_chats[user_id]
-        full_message = f"{JARVIS_PROMPT}\n\nUser: {message}"
-        response = chat.send_message(full_message)
-        return response.text
-    except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        return "⚠️ AI temporarily unavailable. Please dobara try karo!"
+# ================== AI RESPONSE ==================
+async def get_ai_response(user_id: int, message: str):
 
-# ── KEYBOARDS ────────────────────────────────────────────────────────
+    if user_id not in user_chats:
+        user_chats[user_id] = []
+
+    user_chats[user_id].append(f"User: {message}")
+    user_chats[user_id] = user_chats[user_id][-MAX_HISTORY:]
+
+    full_prompt = JARVIS_PROMPT + "\n\n" + "\n".join(user_chats[user_id])
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=full_prompt
+        )
+
+        reply = getattr(response, "text", None)
+
+        if not reply:
+            reply = "⚠️ AI se response nahi mila. Dobara try karo."
+
+        user_chats[user_id].append(f"JARVIS: {reply}")
+        return reply
+
+    except Exception as e:
+        logger.error(f"Gemini Error: {e}")
+        return "⚠️ AI temporarily busy hai. Thodi der baad try karo."
+
+# ================== KEYBOARD ==================
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏛️ Latest Jobs", callback_data="all_jobs"),
-         InlineKeyboardButton("📂 Categories", callback_data="show_categories")],
-        [InlineKeyboardButton("🎯 Banking", callback_data="cat_banking"),
-         InlineKeyboardButton("🚂 Railway", callback_data="cat_railway")],
-        [InlineKeyboardButton("📚 SSC", callback_data="cat_ssc"),
-         InlineKeyboardButton("🎖️ UPSC", callback_data="cat_upsc")],
-        [InlineKeyboardButton("🏫 Teaching", callback_data="cat_teaching"),
-         InlineKeyboardButton("🛡️ Defence", callback_data="cat_defence")],
-        [InlineKeyboardButton("❓ Help", callback_data="help_menu")],
+        [InlineKeyboardButton("🏛️ Latest Jobs", callback_data="refresh")],
+        [InlineKeyboardButton("📂 Categories", callback_data="categories")],
+        [InlineKeyboardButton("❓ Help", callback_data="help")]
     ])
 
-# ── COMMANDS ─────────────────────────────────────────────────────────
+# ================== COMMANDS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_user.first_name or "Friend"
-    msg = (
-        f"🤖 *Namaste {name}! Main JARVIS hoon!*\n\n"
-        f"Main tumhara personal *Sarkari Job Expert* hoon!\n\n"
-        f"✅ Latest govt jobs dhundhna\n"
-        f"✅ Eligibility batana\n"
-        f"✅ Government schemes explain karna\n"
-        f"✅ Exam preparation tips dena\n\n"
-        f"💬 *Seedha pooch sakte ho — Hindi ya English mein!*\n"
-        f"Ya neeche buttons use karo 👇"
+    await update.message.reply_text(
+        "🤖 *Namaste! Main JARVIS hoon — Sarkari Job Expert*\n\n"
+        "💬 Seedha job ya exam ka sawaal pooch sakte ho!",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
     )
-    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=main_keyboard())
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🤖 *JARVIS — Help Menu*\n\n"
-        "📌 *Commands:*\n"
-        "/start — Bot shuru karo\n"
-        "/jobs — Latest sarkari jobs\n"
-        "/banking /railway /ssc /upsc\n"
-        "/teaching /defence /state /police\n"
-        "/clear — Chat history clear karo\n\n"
-        "💬 *AI Chat:* Seedha koi bhi sawaal pooch!\n"
-        "_Jaise: SSC tips do, Bihar schemes batao_"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏛️ Jobs Dekho", callback_data="all_jobs"),
-         InlineKeyboardButton("🔙 Back", callback_data="back_start")]
-    ])
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-async def jobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Jobs load ho rahi hain...")
-    jobs = fetch_jobs("https://www.freejobalert.com/feed/")
-    text, keyboard = format_jobs(jobs, "🏛️ Latest Sarkari Jobs")
-    await msg.edit_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
+    jobs = fetch_jobs(MAIN_FEED)
+    text, keyboard = format_jobs(jobs)
+    await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
-async def cat_command(update, context, category: str):
-    msg = await update.message.reply_text(f"⏳ {CAT_NAMES.get(category)} load ho rahi hain...")
-    jobs = fetch_jobs(CATEGORY_FEEDS[category])
-    text, keyboard = format_jobs(jobs, CAT_NAMES.get(category))
-    await msg.edit_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_text = update.message.text
 
-async def banking_cmd(u, c): await cat_command(u, c, "banking")
-async def railway_cmd(u, c): await cat_command(u, c, "railway")
-async def ssc_cmd(u, c):     await cat_command(u, c, "ssc")
-async def upsc_cmd(u, c):    await cat_command(u, c, "upsc")
-async def teaching_cmd(u, c):await cat_command(u, c, "teaching")
-async def defence_cmd(u, c): await cat_command(u, c, "defence")
-async def state_cmd(u, c):   await cat_command(u, c, "state")
-async def police_cmd(u, c):  await cat_command(u, c, "police")
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action="typing"
+    )
 
-async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chats.pop(update.effective_user.id, None)
-    await update.message.reply_text("🗑️ *Chat history clear ho gayi!* Fresh start 🚀", parse_mode="Markdown")
+    reply = await get_ai_response(user_id, user_text)
+    await update.message.reply_text(reply)
 
-# ── BUTTON HANDLER ────────────────────────────────────────────────────
+# ================== BUTTON HANDLER ==================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    if data == "all_jobs":
-        await query.edit_message_text("⏳ Jobs load ho rahi hain...")
-        jobs = fetch_jobs("https://www.freejobalert.com/feed/")
-        text, keyboard = format_jobs(jobs, "🏛️ Latest Sarkari Jobs")
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
+    if query.data == "refresh":
+        jobs = fetch_jobs(MAIN_FEED)
+        text, keyboard = format_jobs(jobs)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
-    elif data == "show_categories":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏦 Banking", callback_data="cat_banking"),
-             InlineKeyboardButton("🚂 Railway", callback_data="cat_railway")],
-            [InlineKeyboardButton("📚 SSC", callback_data="cat_ssc"),
-             InlineKeyboardButton("🎖️ UPSC", callback_data="cat_upsc")],
-            [InlineKeyboardButton("🏫 Teaching", callback_data="cat_teaching"),
-             InlineKeyboardButton("🛡️ Defence", callback_data="cat_defence")],
-            [InlineKeyboardButton("🏛️ State Govt", callback_data="cat_state"),
-             InlineKeyboardButton("👮 Police", callback_data="cat_police")],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_start")],
-        ])
-        await query.edit_message_text("📂 *Job Categories*\n\nKaunsi jobs dekhni hain?",
-                                      parse_mode="Markdown", reply_markup=keyboard)
+    elif query.data == "categories":
+        buttons = []
+        for key, value in CAT_NAMES.items():
+            buttons.append([InlineKeyboardButton(value, callback_data=f"cat_{key}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
 
-    elif data.startswith("cat_"):
-        category = data.replace("cat_", "")
-        if category in CATEGORY_FEEDS:
-            await query.edit_message_text(f"⏳ {CAT_NAMES.get(category)} load ho rahi hain...")
-            jobs = fetch_jobs(CATEGORY_FEEDS[category])
-            text, keyboard = format_jobs(jobs, CAT_NAMES.get(category))
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard,
-                                          disable_web_page_preview=True)
-
-    elif data == "help_menu":
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_start")]])
         await query.edit_message_text(
-            "🤖 *Help*\n\n/start /jobs /banking /railway /ssc /upsc\n/teaching /defence /state /police /clear\n\n"
-            "💬 Seedha koi bhi sawaal pooch!", parse_mode="Markdown", reply_markup=keyboard)
+            "📂 *Select Category*",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
-    elif data == "back_start":
-        await query.edit_message_text("🤖 *JARVIS — Main Menu*\n\nKya karna hai?",
-                                      parse_mode="Markdown", reply_markup=main_keyboard())
+    elif query.data.startswith("cat_"):
+        category = query.data.replace("cat_", "")
+        jobs = fetch_jobs(CATEGORY_FEEDS[category])
+        text, keyboard = format_jobs(jobs, CAT_NAMES[category])
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
-# ── MESSAGE HANDLER ───────────────────────────────────────────────────
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text.strip()
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    ai_reply = await get_ai_response(user_id, user_text)
-    job_keywords = ["job", "naukri", "vacancy", "bharti", "recruitment", "sarkari"]
-    if any(kw in user_text.lower() for kw in job_keywords):
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏛️ Latest Jobs", callback_data="all_jobs"),
-             InlineKeyboardButton("📂 Categories", callback_data="show_categories")]
-        ])
-        await update.message.reply_text(ai_reply, parse_mode="Markdown", reply_markup=keyboard)
-    else:
-        await update.message.reply_text(ai_reply, parse_mode="Markdown")
+    elif query.data == "back":
+        await query.edit_message_text(
+            "🤖 *Main Menu*",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard()
+        )
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Error: {context.error}")
-
-# ── MAIN ──────────────────────────────────────────────────────────────
+# ================== MAIN ==================
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("jobs", jobs_command))
-    app.add_handler(CommandHandler("banking", banking_cmd))
-    app.add_handler(CommandHandler("railway", railway_cmd))
-    app.add_handler(CommandHandler("ssc", ssc_cmd))
-    app.add_handler(CommandHandler("upsc", upsc_cmd))
-    app.add_handler(CommandHandler("teaching", teaching_cmd))
-    app.add_handler(CommandHandler("defence", defence_cmd))
-    app.add_handler(CommandHandler("state", state_cmd))
-    app.add_handler(CommandHandler("police", police_cmd))
-    app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler("jobs", jobs))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_error_handler(error_handler)
-    logger.info("JARVIS Bot starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    logger.info("🚀 JARVIS Bot Running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
