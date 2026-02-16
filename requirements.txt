@@ -1,25 +1,10 @@
-# Core Telegram Bot + Job Scheduling (daily updates)
 python-telegram-bot[job-queue]>=21.0
-
-# RSS/Feed parsing for job/scheme alerts
-feedparser
-
-# Google Gemini AI (ChatGPT-like smart responses)
 google-generativeai
-
-# Async HTTP for fast API calls (real-time search, job APIs)
+feedparser
+apscheduler
 aiohttp
-
-# BeautifulSoup for web scraping (if RSS not enough, scrape sites)
 beautifulsoup4
 requests
-
-# APScheduler (more advanced than job-queue for complex scheduling)
-apscheduler
-
-# Environment variable management (better handling of keys)
 python-dotenv
-
-# Optional: For future voice/image input/output
-pydub  # Audio processing
-Pillow  # Image processing
+pydub          # Voice messages के लिए
+Pillow         # Image handling
