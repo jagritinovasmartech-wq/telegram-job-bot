@@ -16,10 +16,11 @@ if not TOKEN:
 
 # RSS फीड्स (Bihar + India सरकारी जॉब्स/स्कीम्स के लिए)
 RSS_FEEDS = [
-    "https://www.sarkariresult.com/rssfeed.xml",           # Sarkari Result
-    "https://www.freejobalert.com/latest-jobs-rss-feed/",  # FreeJobAlert
-    "https://employmentnews.gov.in/rssfeed.xml"            # Employment News (सरकारी)
-    # Bihar स्पेसिफिक बाद में ऐड करेंगे
+    "https://www.sarkariresult.com/rssfeed.xml",                 # Sarkari Result (जॉब्स)
+    "https://www.freejobalert.com/latest-jobs-rss-feed/",       # FreeJobAlert
+    "https://employmentnews.gov.in/rssfeed.xml",                # Employment News (सरकारी)
+    "https://www.indgovtjobs.in/feeds/posts/default",           # IndGovtJobs
+    "https://biharhelp.in/feed/"                                # Bihar Help (Bihar फोकस्ड)
 ]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -79,4 +80,36 @@ def main() -> None:
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
+  import time  # रोज अपडेट के लिए
+
+async def daily_update(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """रोज सुबह 8 बजे अपडेट भेजो"""
+    bot = context.bot
+    try:
+        with open("subscribers.txt", "r") as f:
+            chat_ids = [int(line.strip()) for line in f if line.strip()]
+    except FileNotFoundError:
+        chat_ids = []
+        logger.info("कोई सब्सक्राइब्ड यूजर नहीं")
+        return
+
+    message = "🌅 आज के नए सरकारी जॉब्स और स्कीम्स अपडेट्स!\n\n"
+    found = False
+
+    for feed_url in RSS_FEEDS:
+        feed = feedparser.parse(feed_url)
+        if feed.entries:
+            found = True
+            message += f"**{feed.feed.title or 'Update'}**\n"
+            for entry in feed.entries[:3]:  # टॉप 3
+                message += f"• {entry.title}\n  {entry.link}\n\n"
+
+    if not found:
+        message += "आज कोई नई अपडेट नहीं। कल ट्राई करें!"
+
+    for chat_id in chat_ids:
+        try:
+            await bot.send_message(chat_id=chat_id, text=message)
+        except Exception as e:
+            logger.error(f"User {chat_id} को मैसेज नहीं भेजा: {e}")  main(job_queue = application.job_queue
+job_queue.run_daily(daily_update, time=time(8, 0, 0))  # सुबह 8 बजे IST)
